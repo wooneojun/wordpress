@@ -1,0 +1,145 @@
+name: Deploy WordPress Infrastructure
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  terraform:
+    name: 'Terraform'
+    runs-on: ubuntu-latest
+
+    # 다른 작업이 같은 상태 파일을 동시에 수정하지 않도록 합니다
+    concurrency: 
+      group: terraform
+      cancel-in-progress: false
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-northeast-2
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+
+    - name: Terraform Init
+      run: |
+        cd terraform
+        terraform init
+
+    - name: Terraform Format
+      run: |
+        cd terraform
+        terraform fmt -check
+
+    - name: Terraform Plan
+      id: plan
+      run: |
+        cd terraform
+        terraform plan -no-color -input=false \
+          -var="db_username=${{ secrets.DB_USERNAME }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="ecr_repository_url=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com/wordpress"
+      continue-on-error: true
+
+    - name: Update Pull Request
+      uses: actions/github-script@v6
+      if: github.event_name == 'pull_request'
+      env:
+        PLAN: "terraform\n${{ steps.plan.outputs.stdout }}"
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          const output = `#### Terraform Plan 📝\`${{ steps.plan.outcome }}\`
+          
+          <details><summary>Show Plan</summary>
+          
+          \`\`\`\n
+          ${process.env.PLAN}
+          \`\`\`
+          
+          </details>`;
+            
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: output
+          })
+
+    - name: Terraform Apply
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      run: |
+        cd terraform
+        terraform apply -auto-approve -input=false \
+          -var="db_username=${{ secrets.DB_USERNAME }}" \
+          -var="db_password=${{ secrets.DB_PASSWORD }}" \
+          -var="ecr_repository_url=${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.ap-northeast-2.amazonaws.com/wordpress"
+
+  build-and-deploy:
+    name: 'Build and Deploy WordPress'
+    needs: terraform
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-northeast-2
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Generate WordPress Security Keys
+      id: security-keys
+      run: |
+        KEYS=$(curl -s https://api.wordpress.org/secret-key/1.1/salt/ | \
+          sed -E "s/define\('([A-Z_]+)',[ ]*'(.+)'\);/'\1':'\2',/g" | \
+          tr -d '\n' | sed 's/,$//g')
+        echo "SECURITY_KEYS={$KEYS}" >> $GITHUB_ENV
+
+    - name: Build, tag, and push Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: wordpress
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        cd docker
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        echo "::set-output name=image::$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+    - name: Update ECS service
+      run: |
+        aws ecs update-service --cluster wordpress-cluster --service wordpress-service --force-new-deployment
+
+    - name: Wait for deployment to complete
+      run: |
+        aws ecs wait services-stable --cluster wordpress-cluster --services wordpress-service
+
+    - name: Get ALB URL
+      id: get-alb
+      run: |
+        ALB_URL=$(aws cloudformation describe-stacks --stack-name wordpress-infrastructure --query "Stacks[0].Outputs[?OutputKey=='ALBDNSName'].OutputValue" --output text)
+        echo "::set-output name=url::$ALB_URL"
+
+    - name: Deployment Summary
+      run: |
+        echo "WordPress has been deployed!"
+        echo "ALB URL: ${{ steps.get-alb.outputs.url }}"
+        echo "Image: ${{ steps.login-ecr.outputs.registry }}/wordpress:${{ github.sha }}"
