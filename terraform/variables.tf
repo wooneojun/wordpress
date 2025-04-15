@@ -1,6 +1,6 @@
 variable "aws_region" {
   description = "The AWS region to deploy resources"
-  default     = "ap-northeast-2"  # 서울 리전
+  default     = "ap-northeast-2" # 서울 리전
 }
 
 variable "vpc_cidr" {

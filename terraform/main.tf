@@ -7,7 +7,7 @@ resource "aws_vpc" "wordpress_vpc" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
-  
+
   tags = {
     Name = "wordpress-vpc"
   }
@@ -20,7 +20,7 @@ resource "aws_subnet" "public_subnets" {
   cidr_block              = var.public_subnet_cidrs[count.index]
   availability_zone       = var.availability_zones[count.index]
   map_public_ip_on_launch = true
-  
+
   tags = {
     Name = "public-subnet-${count.index + 1}"
   }
@@ -32,7 +32,7 @@ resource "aws_subnet" "private_subnets" {
   vpc_id            = aws_vpc.wordpress_vpc.id
   cidr_block        = var.private_subnet_cidrs[count.index]
   availability_zone = var.availability_zones[count.index]
-  
+
   tags = {
     Name = "private-subnet-${count.index + 1}"
   }
@@ -41,7 +41,7 @@ resource "aws_subnet" "private_subnets" {
 # 인터넷 게이트웨이
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.wordpress_vpc.id
-  
+
   tags = {
     Name = "wordpress-igw"
   }
@@ -50,12 +50,12 @@ resource "aws_internet_gateway" "igw" {
 # 퍼블릭 라우팅 테이블
 resource "aws_route_table" "public_route_table" {
   vpc_id = aws_vpc.wordpress_vpc.id
-  
+
   route {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-  
+
   tags = {
     Name = "public-route-table"
   }
@@ -71,7 +71,7 @@ resource "aws_route_table_association" "public_subnet_association" {
 # NAT 게이트웨이용 탄력적 IP
 resource "aws_eip" "nat_eip" {
   domain = "vpc"
-  
+
   tags = {
     Name = "nat-eip"
   }
@@ -81,7 +81,7 @@ resource "aws_eip" "nat_eip" {
 resource "aws_nat_gateway" "nat_gateway" {
   allocation_id = aws_eip.nat_eip.id
   subnet_id     = aws_subnet.public_subnets[0].id
-  
+
   tags = {
     Name = "wordpress-nat-gateway"
   }
@@ -90,12 +90,12 @@ resource "aws_nat_gateway" "nat_gateway" {
 # 프라이빗 라우팅 테이블
 resource "aws_route_table" "private_route_table" {
   vpc_id = aws_vpc.wordpress_vpc.id
-  
+
   route {
     cidr_block     = "0.0.0.0/0"
     nat_gateway_id = aws_nat_gateway.nat_gateway.id
   }
-  
+
   tags = {
     Name = "private-route-table"
   }
@@ -158,7 +158,7 @@ resource "aws_db_instance" "wordpress_db" {
   vpc_security_group_ids = [aws_security_group.rds_sg.id]
   skip_final_snapshot    = true
   multi_az               = true
-  
+
   tags = {
     Name = "wordpress-database"
   }
@@ -184,14 +184,14 @@ resource "aws_ecs_task_definition" "wordpress_task" {
       name      = "wordpress"
       image     = "${var.ecr_repository_url}:latest"
       essential = true
-      
+
       environment = [
         { name = "WORDPRESS_DB_HOST", value = aws_db_instance.wordpress_db.endpoint },
         { name = "WORDPRESS_DB_USER", value = var.db_username },
         { name = "WORDPRESS_DB_PASSWORD", value = var.db_password },
         { name = "WORDPRESS_DB_NAME", value = "wordpress" }
       ]
-      
+
       portMappings = [
         {
           containerPort = 80
@@ -199,7 +199,7 @@ resource "aws_ecs_task_definition" "wordpress_task" {
           protocol      = "tcp"
         }
       ]
-      
+
       logConfiguration = {
         logDriver = "awslogs"
         options = {
@@ -361,9 +361,9 @@ resource "aws_s3_bucket_policy" "wordpress_media_policy" {
     Version = "2012-10-17"
     Statement = [
       {
-        Action    = ["s3:GetObject"]
-        Effect    = "Allow"
-        Resource  = "${aws_s3_bucket.wordpress_media.arn}/*"
+        Action   = ["s3:GetObject"]
+        Effect   = "Allow"
+        Resource = "${aws_s3_bucket.wordpress_media.arn}/*"
         Principal = {
           AWS = "*"
         }
@@ -473,7 +473,7 @@ resource "aws_iam_policy" "s3_access_policy" {
           "s3:DeleteObject",
           "s3:ListBucket"
         ]
-        Effect   = "Allow"
+        Effect = "Allow"
         Resource = [
           "${aws_s3_bucket.wordpress_media.arn}",
           "${aws_s3_bucket.wordpress_media.arn}/*"
@@ -506,7 +506,7 @@ resource "aws_cloudwatch_metric_alarm" "high_cpu" {
   statistic           = "Average"
   threshold           = 80
   alarm_description   = "This metric monitors ECS CPU utilization"
-  
+
   dimensions = {
     ClusterName = aws_ecs_cluster.wordpress_cluster.name
     ServiceName = aws_ecs_service.wordpress_service.name
@@ -516,7 +516,7 @@ resource "aws_cloudwatch_metric_alarm" "high_cpu" {
 # CI/CD를 위한 상태 저장소
 resource "aws_s3_bucket" "terraform_state" {
   bucket = "terraform-state-wordpress-project"
-  
+
   lifecycle {
     prevent_destroy = true
   }
